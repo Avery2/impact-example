@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PostHog Engineering Impact Dashboard</title>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --surface: #ffffff;
+      --border: #e5e5e5;
+      --text: #171717;
+      --text-secondary: #525252;
+      --accent: #4f46e5;
+      --green: #059669;
+      --yellow: #d97706;
+      --red: #dc2626;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 2rem;
+    }
+
+    header h1 { font-size: 1.25rem; font-weight: 600; }
+
+    header .meta {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    header .meta a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    header .meta a:hover { text-decoration: underline; }
+
+    /* Hero */
+    .hero {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .hero-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
+    }
+
+    .hero-score {
+      font-size: 4rem;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 0.25rem;
+    }
+
+    .hero-band {
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 0.75rem;
+    }
+
+    .hero-bar {
+      width: 100%;
+      max-width: 400px;
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+
+    .hero-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.5s ease;
+    }
+
+    .hero-breakdown {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      margin-top: 1rem;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    .hero-breakdown span { font-weight: 600; color: var(--text); }
+
+    /* Cards grid */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+
+    .card-archetype {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .card-name {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+    }
+
+    .card-stat {
+      font-size: 0.875rem;
+      color: var(--text);
+      margin-bottom: 1rem;
+      padding: 0.5rem 0.75rem;
+      background: #f5f3ff;
+      border-radius: 6px;
+    }
+
+    .card-stat strong { color: var(--accent); }
+
+    .dimension-bars { display: flex; flex-direction: column; gap: 0.4rem; }
+
+    .dim-row {
+      display: flex;
+      align-items: center;
+      font-size: 0.75rem;
+      gap: 0.5rem;
+    }
+
+    .dim-label { width: 90px; color: var(--text-secondary); text-align: right; }
+
+    .dim-bar-bg {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .dim-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--accent);
+      transition: width 0.4s ease;
+    }
+
+    .dim-value { width: 28px; font-size: 0.7rem; color: var(--text-secondary); }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .footer a { color: var(--accent); text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+
+    /* Config button */
+    .config-btn {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      color: var(--text-secondary);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    .config-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border-radius: 12px;
+      padding: 2rem;
+      width: 90%;
+      max-width: 500px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .modal h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+
+    .modal p { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1.5rem; }
+
+    .slider-group { margin-bottom: 1.25rem; }
+
+    .slider-group label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .slider-group input[type="range"] { width: 100%; }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+    }
+
+    .modal-actions button {
+      padding: 0.4rem 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .modal-actions .primary {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .loading {
+      text-align: center;
+      padding: 4rem;
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Engineering Impact Dashboard</h1>
+      <div class="meta">
+        PostHog/posthog · Dec 2, 2025 – Mar 2, 2026
+        <br><a href="notebook.html">See how this was calculated →</a>
+      </div>
+    </header>
+
+    <div id="hero" class="hero">
+      <div class="loading">Loading data…</div>
+    </div>
+
+    <div id="cards" class="cards">
+    </div>
+
+    <div class="footer">
+      <a href="notebook.html">Full methodology & data notebook →</a>
+    </div>
+  </div>
+
+  <button class="config-btn" onclick="openModal()">Edit weights</button>
+
+  <div class="modal-overlay" id="modal">
+    <div class="modal">
+      <h2>Dimension Weights</h2>
+      <p>Adjust how much each dimension contributes to the composite score. Scores and archetypes recalculate instantly.</p>
+      <div class="slider-group">
+        <label>Delivery <span id="w-delivery-val">1.0×</span></label>
+        <input type="range" id="w-delivery" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-delivery-val')">
+      </div>
+      <div class="slider-group">
+        <label>Scope <span id="w-scope-val">1.0×</span></label>
+        <input type="range" id="w-scope" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-scope-val')">
+      </div>
+      <div class="slider-group">
+        <label>Collaboration <span id="w-collaboration-val">1.0×</span></label>
+        <input type="range" id="w-collaboration" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-collaboration-val')">
+      </div>
+      <div class="slider-group">
+        <label>Stability <span id="w-stability-val">1.0×</span></label>
+        <input type="range" id="w-stability" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-stability-val')">
+      </div>
+      <div class="modal-actions">
+        <button onclick="closeModal()">Cancel</button>
+        <button class="primary" onclick="applyWeights()">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const DATA_DIR = 'raw-data';
+    let rawData = {};
+    let engineers = [];
+    let weights = { delivery: 1, scope: 1, collaboration: 1, stability: 1 };
+
+    // ---- Data Loading ----
+    async function loadJSON(name) {
+      const resp = await fetch(`${DATA_DIR}/${name}`);
+      if (!resp.ok) return null;
+      return resp.json();
+    }
+
+    async function init() {
+      const [commits, prs, issues] = await Promise.all([
+        loadJSON('commits.json'),
+        loadJSON('prs.json'),
+        loadJSON('issues.json'),
+      ]);
+      rawData = { commits: commits || [], prs: prs || [], issues: issues || [] };
+
+      if (rawData.prs.length === 0) {
+        document.getElementById('hero').innerHTML = '<div class="loading">PR data not yet available. Run collect_prs.py first.</div>';
+        return;
+      }
+
+      computeAndRender();
+    }
+
+    // ---- Scoring ----
+    function percentileRank(values) {
+      const sorted = [...values].sort((a, b) => a - b);
+      return values.map(v => {
+        const rank = sorted.filter(s => s < v).length;
+        const tie = sorted.filter(s => s === v).length;
+        return sorted.length > 1 ? 100 * (rank + (tie - 1) / 2) / (sorted.length - 1) : 50;
+      });
+    }
+
+    function isUserFacing(path) {
+      return /^frontend\/|\.tsx$|\.jsx$|\.css$|\.scss$|templates\//i.test(path || '');
+    }
+
+    function computeEngineers() {
+      const { commits, prs, issues } = rawData;
+
+      // Index commits by author (non-merge)
+      const commitsByAuthor = {};
+      for (const c of commits) {
+        if (c.is_merge) continue;
+        const a = c.author_name;
+        if (!commitsByAuthor[a]) commitsByAuthor[a] = { count: 0, adds: 0, dels: 0 };
+        commitsByAuthor[a].count += 1;
+        commitsByAuthor[a].adds += c.total_additions;
+        commitsByAuthor[a].dels += c.total_deletions;
+      }
+
+      // Index PRs by author
+      const prsByAuthor = {};
+      for (const pr of prs) {
+        const a = pr.author;
+        if (!a) continue;
+        if (!prsByAuthor[a]) prsByAuthor[a] = [];
+        prsByAuthor[a].push(pr);
+      }
+
+      // Index reviews
+      const reviewsByAuthor = {};
+      for (const pr of prs) {
+        for (const r of (pr.reviews || [])) {
+          const a = r.author;
+          if (!a) continue;
+          if (!reviewsByAuthor[a]) reviewsByAuthor[a] = { total: 0, approved: 0, changes: 0, commented: 0 };
+          reviewsByAuthor[a].total++;
+          if (r.state === 'APPROVED') reviewsByAuthor[a].approved++;
+          if (r.state === 'CHANGES_REQUESTED') reviewsByAuthor[a].changes++;
+          if (r.state === 'COMMENTED') reviewsByAuthor[a].commented++;
+        }
+      }
+
+      // Issues by creator
+      const issuesByCreator = {};
+      for (const i of issues) {
+        const a = i.creator;
+        if (!a) continue;
+        issuesByCreator[a] = (issuesByCreator[a] || 0) + 1;
+      }
+
+      // Build unified engineer list (keyed by PR author login)
+      const allAuthors = new Set([...Object.keys(prsByAuthor), ...Object.keys(reviewsByAuthor)]);
+      const engList = [];
+
+      for (const author of allAuthors) {
+        const myPRs = prsByAuthor[author] || [];
+        const myReviews = reviewsByAuthor[author] || { total: 0, approved: 0, changes: 0, commented: 0 };
+        const myIssues = issuesByCreator[author] || 0;
+
+        // Cycle time
+        const cycleDays = myPRs.map(pr => {
+          const created = new Date(pr.created_at);
+          const merged = new Date(pr.merged_at);
+          return (merged - created) / (1000 * 60 * 60 * 24);
+        }).filter(d => d >= 0);
+        const medianCycle = cycleDays.length ? cycleDays.sort((a,b) => a-b)[Math.floor(cycleDays.length/2)] : 999;
+
+        // User-facing %
+        let ufCount = 0, totalFiles = 0;
+        for (const pr of myPRs) {
+          for (const f of (pr.files || [])) {
+            totalFiles++;
+            if (isUserFacing(f.path)) ufCount++;
+          }
+        }
+        const ufPct = totalFiles > 0 ? ufCount / totalFiles : 0;
+
+        // Labels
+        let bugPRs = 0, featurePRs = 0;
+        for (const pr of myPRs) {
+          const labels = (pr.labels || []).join(' ').toLowerCase();
+          if (/bug|fix|hotfix/.test(labels)) bugPRs++;
+          if (/feat|feature|enhancement/.test(labels)) featurePRs++;
+        }
+
+        // Try to match commit data (heuristic: author login in commit author name/email)
+        let commitCount = 0, linesAdded = 0, linesDeleted = 0;
+        const authorLower = author.toLowerCase();
+        for (const [name, data] of Object.entries(commitsByAuthor)) {
+          if (name.toLowerCase().includes(authorLower) || authorLower.includes(name.toLowerCase().split(' ')[0])) {
+            commitCount += data.count;
+            linesAdded += data.adds;
+            linesDeleted += data.dels;
+            break;
+          }
+        }
+
+        engList.push({
+          author,
+          prCount: myPRs.length,
+          commitCount,
+          medianCycle,
+          totalAdditions: myPRs.reduce((s, p) => s + p.additions, 0),
+          totalDeletions: myPRs.reduce((s, p) => s + p.deletions, 0),
+          reviewsGiven: myReviews.total,
+          approvalsGiven: myReviews.approved,
+          changesRequested: myReviews.changes,
+          reviewComments: myReviews.commented,
+          ufPct,
+          bugPRs,
+          featurePRs,
+          issuesClosed: myIssues,
+          churnRate: linesAdded > 0 ? linesDeleted / linesAdded : 0,
+        });
+      }
+
+      // Compute percentile ranks for each signal
+      const signals = {
+        prCount: engList.map(e => e.prCount),
+        commitCount: engList.map(e => e.commitCount),
+        medianCycleInv: engList.map(e => -e.medianCycle),
+        issuesClosed: engList.map(e => e.issuesClosed),
+        ufPct: engList.map(e => e.ufPct),
+        featurePRs: engList.map(e => e.featurePRs),
+        totalAdditions: engList.map(e => e.totalAdditions),
+        reviewsGiven: engList.map(e => e.reviewsGiven),
+        changesRequested: engList.map(e => e.changesRequested),
+        reviewComments: engList.map(e => e.reviewComments),
+        churnInv: engList.map(e => -e.churnRate),
+      };
+
+      const pr = {};
+      for (const [key, vals] of Object.entries(signals)) {
+        pr[key] = percentileRank(vals);
+      }
+
+      for (let i = 0; i < engList.length; i++) {
+        const e = engList[i];
+        e.delivery = (pr.prCount[i] + pr.commitCount[i] + pr.medianCycleInv[i] + pr.issuesClosed[i]) / 4;
+        e.scope = (pr.ufPct[i] + pr.featurePRs[i] + pr.totalAdditions[i]) / 3;
+        e.collaboration = (pr.reviewsGiven[i] + pr.changesRequested[i] + pr.reviewComments[i]) / 3;
+        e.stability = pr.churnInv[i];
+      }
+
+      return engList;
+    }
+
+    function applyComposite(engs) {
+      const w = weights;
+      const totalW = w.delivery + w.scope + w.collaboration + w.stability;
+      if (totalW === 0) return engs;
+      for (const e of engs) {
+        e.composite = (e.delivery * w.delivery + e.scope * w.scope +
+                       e.collaboration * w.collaboration + e.stability * w.stability) / totalW;
+      }
+      return engs.sort((a, b) => b.composite - a.composite);
+    }
+
+    // ---- Archetypes ----
+    const ARCHETYPES = {
+      firefighter: { emoji: '🔥', name: 'The Firefighter', desc: 'Closes the most bugs and hotfixes' },
+      scaffolder: { emoji: '🏗️', name: 'The Scaffolder', desc: 'Builds foundational infrastructure' },
+      ux_driver: { emoji: '🎨', name: 'The UX Driver', desc: 'Owns the user-facing surface' },
+      reviewer: { emoji: '🔭', name: 'The Reviewer', desc: 'Unblocks the team through reviews' },
+      integrator: { emoji: '🧩', name: 'The Integrator', desc: 'Cross-cutting work across many areas' },
+    };
+
+    function assignArchetype(eng, allEngs) {
+      const maxBug = Math.max(...allEngs.map(e => e.bugPRs), 1);
+      const maxIssues = Math.max(...allEngs.map(e => e.issuesClosed), 1);
+
+      const scores = {
+        firefighter: (eng.bugPRs / maxBug) * 100,
+        scaffolder: (1 - eng.ufPct) * eng.delivery,
+        ux_driver: eng.ufPct * 100,
+        reviewer: eng.collaboration,
+        integrator: (eng.delivery + (eng.issuesClosed / maxIssues) * 100) / 2,
+      };
+
+      let best = 'integrator', bestScore = -1;
+      for (const [k, v] of Object.entries(scores)) {
+        if (v > bestScore) { best = k; bestScore = v; }
+      }
+      return best;
+    }
+
+    function getDefiningMetric(eng, archetypeKey) {
+      switch (archetypeKey) {
+        case 'firefighter': return `Closed <strong>${eng.bugPRs}</strong> bug-labeled PRs in 90 days`;
+        case 'scaffolder': return `Touched <strong>${eng.prCount}</strong> PRs, <strong>${Math.round((1-eng.ufPct)*100)}%</strong> infrastructure files`;
+        case 'ux_driver': return `<strong>${Math.round(eng.ufPct*100)}%</strong> of files touched are user-facing`;
+        case 'reviewer': return `Gave <strong>${eng.reviewsGiven}</strong> code reviews in 90 days`;
+        case 'integrator': return `Merged <strong>${eng.prCount}</strong> PRs across <strong>${eng.issuesClosed}</strong> issues`;
+      }
+    }
+
+    // ---- Rendering ----
+    function computeAndRender() {
+      engineers = computeEngineers();
+      applyComposite(engineers);
+      renderHero();
+      renderCards();
+    }
+
+    function healthColor(score) {
+      if (score >= 70) return { color: 'var(--green)', band: 'Healthy' };
+      if (score >= 50) return { color: 'var(--yellow)', band: 'Needs attention' };
+      return { color: 'var(--red)', band: 'At risk' };
+    }
+
+    function renderHero() {
+      const avgComposite = engineers.length > 0
+        ? engineers.reduce((s, e) => s + e.composite, 0) / engineers.length
+        : 0;
+
+      const { color, band } = healthColor(avgComposite);
+
+      const avgDims = {
+        delivery: avg(engineers, 'delivery'),
+        scope: avg(engineers, 'scope'),
+        collaboration: avg(engineers, 'collaboration'),
+        stability: avg(engineers, 'stability'),
+      };
+
+      document.getElementById('hero').innerHTML = `
+        <div class="hero-label">Team Health Score</div>
+        <div class="hero-score" style="color: ${color}">${Math.round(avgComposite)}</div>
+        <div class="hero-band" style="color: ${color}">${band}</div>
+        <div class="hero-bar"><div class="hero-bar-fill" style="width: ${avgComposite}%; background: ${color}"></div></div>
+        <div class="hero-breakdown">
+          <div>Delivery <span>${Math.round(avgDims.delivery)}</span></div>
+          <div>Scope <span>${Math.round(avgDims.scope)}</span></div>
+          <div>Collaboration <span>${Math.round(avgDims.collaboration)}</span></div>
+          <div>Stability <span>${Math.round(avgDims.stability)}</span></div>
+        </div>
+      `;
+    }
+
+    function avg(arr, key) {
+      return arr.length > 0 ? arr.reduce((s, e) => s + e[key], 0) / arr.length : 0;
+    }
+
+    function renderCards() {
+      const top5 = engineers.slice(0, 5);
+      const usedArchetypes = new Set();
+      const cards = top5.map(eng => {
+        let archKey = assignArchetype(eng, engineers);
+        // Avoid duplicate archetypes in top 5
+        if (usedArchetypes.has(archKey)) {
+          const altKeys = Object.keys(ARCHETYPES).filter(k => !usedArchetypes.has(k));
+          if (altKeys.length > 0) archKey = altKeys[0];
+        }
+        usedArchetypes.add(archKey);
+        const arch = ARCHETYPES[archKey];
+        const metric = getDefiningMetric(eng, archKey);
+
+        return `
+          <div class="card">
+            <div class="card-archetype">${arch.emoji} ${arch.name}</div>
+            <div class="card-name">${eng.author}</div>
+            <div class="card-stat">${metric}</div>
+            <div class="dimension-bars">
+              ${dimBar('Delivery', eng.delivery)}
+              ${dimBar('Scope', eng.scope)}
+              ${dimBar('Collaboration', eng.collaboration)}
+              ${dimBar('Stability', eng.stability)}
+            </div>
+          </div>
+        `;
+      });
+
+      document.getElementById('cards').innerHTML = cards.join('');
+    }
+
+    function dimBar(label, value) {
+      return `
+        <div class="dim-row">
+          <span class="dim-label">${label}</span>
+          <div class="dim-bar-bg"><div class="dim-bar-fill" style="width: ${value}%"></div></div>
+          <span class="dim-value">${Math.round(value)}</span>
+        </div>
+      `;
+    }
+
+    // ---- Modal ----
+    function openModal() { document.getElementById('modal').classList.add('open'); }
+    function closeModal() { document.getElementById('modal').classList.remove('open'); }
+
+    function updateSliderLabel(input, labelId) {
+      document.getElementById(labelId).textContent = parseFloat(input.value).toFixed(1) + '×';
+    }
+
+    function applyWeights() {
+      weights.delivery = parseFloat(document.getElementById('w-delivery').value);
+      weights.scope = parseFloat(document.getElementById('w-scope').value);
+      weights.collaboration = parseFloat(document.getElementById('w-collaboration').value);
+      weights.stability = parseFloat(document.getElementById('w-stability').value);
+      applyComposite(engineers);
+      renderHero();
+      renderCards();
+      closeModal();
+    }
+
+    // Close modal on overlay click
+    document.getElementById('modal').addEventListener('click', function(e) {
+      if (e.target === this) closeModal();
+    });
+
+    // Go
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,455 @@
+---
+title: "PostHog Engineering Impact — Methodology & Data"
+output:
+  html_document:
+    theme: cosmo
+    toc: true
+    toc_float: true
+    self_contained: true
+params:
+  data_dir: "raw-data"
+  date_start: "2025-12-02"
+  date_end: "2026-03-02"
+  dashboard_url: "https://avery2.github.io/weave-takehome/"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+library(DT)
+library(crosstalk)
+```
+
+[← Back to Dashboard](`r params$dashboard_url`)
+
+## 1. Data Overview
+
+```{r load-data}
+commits <- fromJSON(file.path(params$data_dir, "commits.json"), flatten = TRUE)
+issues <- fromJSON(file.path(params$data_dir, "issues.json"), flatten = TRUE)
+comments <- fromJSON(file.path(params$data_dir, "issue_comments.json"), flatten = TRUE)
+
+has_prs <- file.exists(file.path(params$data_dir, "prs.json"))
+if (has_prs) {
+  prs <- fromJSON(file.path(params$data_dir, "prs.json"), flatten = TRUE)
+} else {
+  prs <- data.frame()
+}
+```
+
+```{r overview-table}
+overview <- tibble(
+  Metric = c("Repository", "Date range", "Total commits", "Unique commit authors",
+             "Merged PRs", "Closed issues", "Issue comments"),
+  Value = c(
+    "PostHog/posthog",
+    paste(params$date_start, "to", params$date_end),
+    format(nrow(commits), big.mark = ","),
+    format(n_distinct(commits$author_email), big.mark = ","),
+    if (has_prs) format(nrow(prs), big.mark = ",") else "Not yet collected",
+    format(nrow(issues), big.mark = ","),
+    format(nrow(comments), big.mark = ",")
+  )
+)
+knitr::kable(overview, align = "lr")
+```
+
+## 2. Signal Distributions
+
+These raw signal distributions show the spread of activity across contributors before any scoring is applied.
+
+### Commits per Author
+
+```{r commits-per-author}
+commits_by_author <- commits %>%
+  filter(!is_merge) %>%
+  group_by(author_name, author_email) %>%
+  summarise(
+    commit_count = n(),
+    total_additions = sum(total_additions),
+    total_deletions = sum(total_deletions),
+    files_touched = sum(lengths(files)),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(commit_count))
+
+sd_commits <- SharedData$new(commits_by_author, key = ~author_email)
+
+bscols(
+  widths = c(6, 6),
+  plot_ly(sd_commits, x = ~commit_count, type = "histogram",
+          marker = list(color = "#4f46e5")) %>%
+    layout(title = "Distribution of Commits per Author",
+           xaxis = list(title = "Commits"), yaxis = list(title = "Authors")),
+  datatable(sd_commits,
+            colnames = c("Author", "Email", "Commits", "Additions", "Deletions", "Files"),
+            options = list(pageLength = 10, dom = "ftp"),
+            rownames = FALSE) %>%
+    formatRound(c("total_additions", "total_deletions", "files_touched"), digits = 0)
+)
+```
+
+### Commit Activity Over Time
+
+```{r commits-over-time}
+commits_daily <- commits %>%
+  mutate(date = as.Date(timestamp)) %>%
+  group_by(date) %>%
+  summarise(count = n(), .groups = "drop")
+
+plot_ly(commits_daily, x = ~date, y = ~count, type = "bar",
+        marker = list(color = "#4f46e5")) %>%
+  layout(title = "Daily Commit Volume",
+         xaxis = list(title = ""), yaxis = list(title = "Commits"))
+```
+
+```{r pr-section, eval=has_prs, results='asis'}
+cat("\n### PRs per Author\n")
+```
+
+```{r pr-dist, eval=has_prs}
+prs_by_author <- prs %>%
+  group_by(author) %>%
+  summarise(
+    pr_count = n(),
+    total_additions = sum(additions),
+    total_deletions = sum(deletions),
+    median_cycle_days = median(as.numeric(
+      difftime(ymd_hms(merged_at), ymd_hms(created_at), units = "days")
+    ), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(pr_count))
+
+sd_prs <- SharedData$new(prs_by_author, key = ~author)
+
+bscols(
+  widths = c(6, 6),
+  plot_ly(sd_prs, x = ~pr_count, type = "histogram",
+          marker = list(color = "#059669")) %>%
+    layout(title = "PRs Merged per Author",
+           xaxis = list(title = "PRs Merged"), yaxis = list(title = "Authors")),
+  datatable(sd_prs,
+            colnames = c("Author", "PRs", "Additions", "Deletions", "Median Cycle (days)"),
+            options = list(pageLength = 10, dom = "ftp"),
+            rownames = FALSE) %>%
+    formatRound(c("total_additions", "total_deletions", "median_cycle_days"), digits = 1)
+)
+```
+
+```{r pr-cycle-time, eval=has_prs}
+prs_with_cycle <- prs %>%
+  mutate(cycle_hours = as.numeric(
+    difftime(ymd_hms(merged_at), ymd_hms(created_at), units = "hours")
+  )) %>%
+  filter(cycle_hours >= 0, cycle_hours < 720) # exclude outliers > 30 days
+
+plot_ly(prs_with_cycle, x = ~cycle_hours, type = "histogram",
+        marker = list(color = "#059669")) %>%
+  layout(title = "PR Cycle Time Distribution (hours, < 30 days)",
+         xaxis = list(title = "Hours to Merge"), yaxis = list(title = "PRs"))
+```
+
+### Issues Closed
+
+```{r issues-dist}
+issues_by_creator <- issues %>%
+  group_by(creator) %>%
+  summarise(issues_closed = n(), .groups = "drop") %>%
+  arrange(desc(issues_closed))
+
+plot_ly(issues_by_creator %>% head(30), x = ~reorder(creator, -issues_closed),
+        y = ~issues_closed, type = "bar",
+        marker = list(color = "#d97706")) %>%
+  layout(title = "Issues Closed by Creator (top 30)",
+         xaxis = list(title = "", tickangle = -45),
+         yaxis = list(title = "Issues Closed"))
+```
+
+## 3. Dimension Breakdowns
+
+Scores are computed across four dimensions. Each signal is normalized to a 0–100 scale using percentile rank within the contributor pool before combining.
+
+```{r compute-dimensions, eval=has_prs}
+# Build per-engineer signal table
+# Start with commits (non-merge)
+eng_commits <- commits %>%
+  filter(!is_merge) %>%
+  group_by(author = author_name) %>%
+  summarise(
+    commit_count = n(),
+    lines_added = sum(total_additions),
+    lines_deleted = sum(total_deletions),
+    .groups = "drop"
+  )
+
+# PR signals
+eng_prs <- prs %>%
+  mutate(cycle_days = as.numeric(
+    difftime(ymd_hms(merged_at), ymd_hms(created_at), units = "days")
+  )) %>%
+  group_by(author) %>%
+  summarise(
+    pr_count = n(),
+    median_cycle_days = median(cycle_days, na.rm = TRUE),
+    total_pr_additions = sum(additions),
+    total_pr_deletions = sum(deletions),
+    .groups = "drop"
+  )
+
+# Review signals (from PR reviews data)
+reviews_flat <- prs %>%
+  select(number, reviews) %>%
+  unnest(reviews, names_sep = "_") %>%
+  filter(!is.na(reviews_author))
+
+eng_reviews <- reviews_flat %>%
+  group_by(author = reviews_author) %>%
+  summarise(
+    reviews_given = n(),
+    approvals_given = sum(reviews_state == "APPROVED"),
+    changes_requested = sum(reviews_state == "CHANGES_REQUESTED"),
+    review_comments = sum(reviews_state == "COMMENTED"),
+    .groups = "drop"
+  )
+
+# File classification: user-facing = frontend/*, *.tsx, *.css, templates/
+classify_user_facing <- function(files_list) {
+  if (is.null(files_list) || length(files_list) == 0) return(0)
+  paths <- if (is.data.frame(files_list)) files_list$path else files_list
+  uf <- grepl("^frontend/|\\.(tsx|jsx|css|scss)$|templates/", paths, ignore.case = TRUE)
+  mean(uf, na.rm = TRUE)
+}
+
+pr_files <- prs %>%
+  rowwise() %>%
+  mutate(user_facing_pct = classify_user_facing(files)) %>%
+  ungroup()
+
+eng_uf <- pr_files %>%
+  group_by(author) %>%
+  summarise(user_facing_pct = mean(user_facing_pct, na.rm = TRUE), .groups = "drop")
+
+# Label-based signals
+eng_labels <- prs %>%
+  rowwise() %>%
+  mutate(
+    is_bug = any(grepl("bug|fix|hotfix", labels, ignore.case = TRUE)),
+    is_feature = any(grepl("feat|feature|enhancement", labels, ignore.case = TRUE))
+  ) %>%
+  ungroup() %>%
+  group_by(author) %>%
+  summarise(
+    bug_prs = sum(is_bug),
+    feature_prs = sum(is_feature),
+    .groups = "drop"
+  )
+
+# Issues closed (map by username since issue creator ≠ always the closer)
+eng_issues <- issues %>%
+  group_by(author = creator) %>%
+  summarise(issues_closed = n(), .groups = "drop")
+
+# Join everything
+engineers <- eng_prs %>%
+  full_join(eng_commits, by = "author") %>%
+  full_join(eng_reviews, by = "author") %>%
+  full_join(eng_uf, by = "author") %>%
+  full_join(eng_labels, by = "author") %>%
+  full_join(eng_issues, by = "author") %>%
+  mutate(across(where(is.numeric), ~replace_na(., 0)))
+
+# Percentile rank normalization (0-100)
+prank <- function(x) {
+  r <- rank(x, ties.method = "average", na.last = "keep")
+  100 * (r - 1) / (max(r, na.rm = TRUE) - 1)
+}
+
+# Dimension scores
+engineers <- engineers %>%
+  mutate(
+    # Delivery: PR count, commit count, cycle time (inverse), issues closed
+    d_delivery = (prank(pr_count) + prank(commit_count) +
+                  prank(-median_cycle_days) + prank(issues_closed)) / 4,
+
+    # Scope: user-facing %, feature PR ratio, total additions
+    d_scope = (prank(user_facing_pct) + prank(feature_prs) +
+               prank(total_pr_additions)) / 3,
+
+    # Collaboration: reviews given, review diversity (approvals + changes + comments)
+    d_collaboration = (prank(reviews_given) + prank(changes_requested) +
+                       prank(review_comments)) / 3,
+
+    # Stability: low churn = low deletions relative to additions
+    churn_rate = ifelse(lines_added > 0, lines_deleted / lines_added, 0),
+    d_stability = prank(-churn_rate)
+  )
+
+# Composite (equal weights by default)
+engineers <- engineers %>%
+  mutate(
+    composite = (d_delivery + d_scope + d_collaboration + d_stability) / 4
+  ) %>%
+  arrange(desc(composite))
+```
+
+```{r dimension-table, eval=has_prs}
+engineers %>%
+  select(author, d_delivery, d_scope, d_collaboration, d_stability, composite) %>%
+  head(30) %>%
+  datatable(
+    colnames = c("Engineer", "Delivery", "Scope", "Collaboration", "Stability", "Composite"),
+    options = list(pageLength = 15, dom = "ftp"),
+    rownames = FALSE
+  ) %>%
+  formatRound(c("d_delivery", "d_scope", "d_collaboration", "d_stability", "composite"), digits = 1)
+```
+
+```{r dimension-radar-top5, eval=has_prs, fig.width=10, fig.height=6}
+top5 <- engineers %>% head(5)
+
+radar_data <- top5 %>%
+  select(author, d_delivery, d_scope, d_collaboration, d_stability) %>%
+  pivot_longer(-author, names_to = "dimension", values_to = "score") %>%
+  mutate(dimension = gsub("d_", "", dimension) %>% tools::toTitleCase())
+
+plot_ly(type = "scatterpolar", mode = "lines+markers", fill = "toself") %>%
+  add_trace(
+    r = ~score, theta = ~dimension,
+    data = radar_data %>% filter(author == top5$author[1]),
+    name = top5$author[1]
+  ) %>%
+  add_trace(
+    r = ~score, theta = ~dimension,
+    data = radar_data %>% filter(author == top5$author[2]),
+    name = top5$author[2]
+  ) %>%
+  add_trace(
+    r = ~score, theta = ~dimension,
+    data = radar_data %>% filter(author == top5$author[3]),
+    name = top5$author[3]
+  ) %>%
+  add_trace(
+    r = ~score, theta = ~dimension,
+    data = radar_data %>% filter(author == top5$author[4]),
+    name = top5$author[4]
+  ) %>%
+  add_trace(
+    r = ~score, theta = ~dimension,
+    data = radar_data %>% filter(author == top5$author[5]),
+    name = top5$author[5]
+  ) %>%
+  layout(title = "Top 5 Engineers — Dimension Profiles",
+         polar = list(radialaxis = list(range = c(0, 100))))
+```
+
+## 4. Composite Scores & Archetypes
+
+```{r archetypes, eval=has_prs}
+assign_archetype <- function(row) {
+  scores <- c(
+    firefighter = as.numeric(row["bug_prs"]) / max(engineers$bug_prs, 1) * 100,
+    scaffolder = (1 - as.numeric(row["user_facing_pct"])) * as.numeric(row["d_delivery"]),
+    ux_driver = as.numeric(row["user_facing_pct"]) * 100,
+    reviewer = as.numeric(row["d_collaboration"]),
+    integrator = (as.numeric(row["d_delivery"]) + as.numeric(row["issues_closed"]) /
+                  max(engineers$issues_closed, 1) * 100) / 2
+  )
+  names(which.max(scores))
+}
+
+archetype_labels <- c(
+  firefighter = "\U0001f525 The Firefighter",
+  scaffolder = "\U0001f3d7\ufe0f The Scaffolder",
+  ux_driver = "\U0001f3a8 The UX Driver",
+  reviewer = "\U0001f52d The Reviewer",
+  integrator = "\U0001f9e9 The Integrator"
+)
+
+archetype_descriptions <- c(
+  firefighter = "Closes the most bugs and hotfixes",
+  scaffolder = "Builds foundational infrastructure",
+  ux_driver = "Owns the user-facing surface",
+  reviewer = "Unblocks the team through reviews",
+  integrator = "Cross-cutting work across many areas"
+)
+
+top5 <- engineers %>% head(5)
+top5$archetype_key <- apply(top5, 1, assign_archetype)
+top5$archetype <- archetype_labels[top5$archetype_key]
+top5$archetype_desc <- archetype_descriptions[top5$archetype_key]
+```
+
+```{r top5-table, eval=has_prs}
+top5 %>%
+  select(archetype, author, d_delivery, d_scope, d_collaboration, d_stability, composite) %>%
+  datatable(
+    colnames = c("Archetype", "Engineer", "Delivery", "Scope", "Collaboration", "Stability", "Composite"),
+    options = list(pageLength = 5, dom = "t"),
+    rownames = FALSE
+  ) %>%
+  formatRound(c("d_delivery", "d_scope", "d_collaboration", "d_stability", "composite"), digits = 1)
+```
+
+```{r top5-detail, eval=has_prs, results='asis'}
+for (i in 1:nrow(top5)) {
+  eng <- top5[i, ]
+  cat(sprintf("\n### %s — %s\n\n", eng$archetype, eng$author))
+  cat(sprintf("*%s*\n\n", eng$archetype_desc))
+  cat(sprintf("- **PRs merged:** %d | **Commits:** %d | **Reviews given:** %d\n",
+              eng$pr_count, eng$commit_count, eng$reviews_given))
+  cat(sprintf("- **Median cycle time:** %.1f days\n", eng$median_cycle_days))
+  cat(sprintf("- **User-facing file %%:** %.0f%%\n\n", eng$user_facing_pct * 100))
+}
+```
+
+## 5. Methodology Notes
+
+### How dimensions are computed
+
+Each dimension aggregates multiple raw signals. Before combining, each signal is normalized to a **0–100 percentile rank** within the contributor pool. This prevents any single signal (e.g., lines of code) from dominating.
+
+| Dimension | Signals used | Notes |
+|-----------|-------------|-------|
+| **Delivery** | PR count, commit count, inverse cycle time, issues closed | Cycle time is inverted so faster = higher score |
+| **Scope** | User-facing file %, feature PR count, total additions | "User-facing" = files in `frontend/`, `.tsx/.jsx/.css` files |
+| **Collaboration** | Reviews given, changes requested, review comments | Measures review depth, not just count |
+| **Stability** | Inverse churn rate (deletions/additions) | Lower churn = more stable contributions |
+
+### Composite score
+
+The composite is a simple average of the four dimension scores (equal 25% weights). In the dashboard UI, weights are adjustable via sliders.
+
+### Archetype assignment
+
+Each of the top 5 engineers is assigned one primary archetype based on which contribution pattern they score highest in. The archetype is **descriptive** — it says what kind of work someone does, not how good they are.
+
+### Known limitations
+
+- **Churn rate** is a rough proxy for stability — it doesn't distinguish intentional refactors from bugs
+- **User-facing classification** uses file paths only — misses backend changes that directly affect UX
+- **Review quality** is approximated by comment count, not actual review thoroughness
+- **Bot activity** is included in raw data and filtered only if detected by GitHub username patterns
+- **Issue attribution** uses the issue creator, not necessarily who resolved it
+
+## 6. Open Questions
+
+What this analysis **doesn't yet capture**:
+
+- **Review quality**: Are reviews substantive or rubber-stamp approvals?
+- **Product impact**: Did the shipped code actually improve user metrics?
+- **Cross-team work**: Collaboration beyond the posthog repo
+- **Non-GitHub signals**: Slack discussions, design docs, mentoring, incident response
+- **Revert rate**: How often are PRs reverted after merge?
+- **Deploy frequency**: How often do changes reach production?
+
+---
+
+*Data collected from [PostHog/posthog](https://github.com/PostHog/posthog) for `r params$date_start` to `r params$date_end`.*
+
+[← Back to Dashboard](`r params$dashboard_url`)
