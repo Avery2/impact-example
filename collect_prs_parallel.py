@@ -12,15 +12,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT = os.path.join(BASE_DIR, "raw-data", "prs.json")
 PROGRESS_FILE = os.path.join(BASE_DIR, "raw-data", ".prs_progress.json")
 
-# Split 90 days into 6 chunks of ~15 days
-DATE_CHUNKS = [
-    ("2025-12-02", "2025-12-17"),
-    ("2025-12-17", "2026-01-01"),
-    ("2026-01-01", "2026-01-16"),
-    ("2026-01-16", "2026-01-31"),
-    ("2026-01-31", "2026-02-15"),
-    ("2026-02-15", "2026-03-02"),
-]
+# Generate 5-day chunks to stay well under GitHub's 1000-result search limit (~58 PRs/day = ~290/chunk)
+def generate_chunks(start, end, days=5):
+    from datetime import datetime, timedelta
+    chunks = []
+    current = datetime.strptime(start, "%Y-%m-%d")
+    end_dt = datetime.strptime(end, "%Y-%m-%d")
+    while current < end_dt:
+        chunk_end = min(current + timedelta(days=days), end_dt)
+        chunks.append((current.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
+        current = chunk_end
+    return chunks
+
+DATE_CHUNKS = generate_chunks("2025-12-02", "2026-03-02", days=5)
 
 QUERY_TEMPLATE = """
 query($cursor: String) {{
@@ -98,7 +102,7 @@ def fetch_chunk(start, end):
     cursor = None
     page = 0
 
-    while True:
+    while len(chunk_prs) < 1000:
         page += 1
         variables = json.dumps({"cursor": cursor})
         for attempt in range(3):
@@ -127,6 +131,7 @@ def fetch_chunk(start, end):
         if not search["pageInfo"]["hasNextPage"]:
             break
         cursor = search["pageInfo"]["endCursor"]
+        time.sleep(0.5)
 
     return chunk_prs
 
@@ -134,7 +139,7 @@ def main():
     print(f"Collecting PRs in {len(DATE_CHUNKS)} parallel chunks...", flush=True)
     all_prs = []
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = {executor.submit(fetch_chunk, s, e): (s, e) for s, e in DATE_CHUNKS}
         for future in as_completed(futures):
             s, e = futures[future]
