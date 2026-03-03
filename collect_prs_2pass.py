@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PR collection - 2-pass approach:
-Pass 1: Lightweight search to get all PR numbers (pagination works)
-Pass 2: Fetch full details per PR using direct node query"""
+Pass 1: Lightweight search to get all PR numbers
+Pass 2: Fetch full details in batches of 20"""
 
 import json
 import subprocess
@@ -13,41 +13,7 @@ from datetime import date, timedelta
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT = os.path.join(BASE_DIR, "raw-data", "prs.json")
 
-SEARCH_QUERY = """
-query($cursor: String) {{
-  search(query: "repo:PostHog/posthog is:pr is:merged merged:{start}..{end}", type: ISSUE, first: 100, after: $cursor) {{
-    issueCount
-    pageInfo {{ hasNextPage endCursor }}
-    nodes {{ ... on PullRequest {{ number }} }}
-  }}
-}}
-"""
-
-# Batch query: fetch 25 PRs at once using aliases
-def build_batch_query(numbers):
-    parts = []
-    for i, num in enumerate(numbers):
-        parts.append(f"""
-    pr{i}: repository(owner: "PostHog", name: "posthog") {{
-      pullRequest(number: {num}) {{
-        number title additions deletions changedFiles
-        createdAt mergedAt
-        author {{ login }}
-        mergedBy {{ login }}
-        labels(first: 10) {{ nodes {{ name }} }}
-        body
-        reviewDecision
-        reviews(first: 10) {{
-          nodes {{ state author {{ login }} submittedAt body }}
-        }}
-        files(first: 50) {{
-          nodes {{ path additions deletions changeType }}
-        }}
-        comments {{ totalCount }}
-        reviewThreads {{ totalCount }}
-      }}
-    }}""")
-    return "query {\n" + "\n".join(parts) + "\n}"
+SEARCH_QUERY = 'query($cursor: String) {{ search(query: "repo:PostHog/posthog is:pr is:merged merged:{start}..{end}", type: ISSUE, first: 100, after: $cursor) {{ issueCount pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ number }} }} }} }}'
 
 def truncate(text, max_len=200):
     if not text:
@@ -92,88 +58,71 @@ def parse_pr(node):
         ],
     }
 
-def gh_graphql(query, max_retries=3):
+def gh_graphql(query, cursor=None, max_retries=3):
+    """Run a GraphQL query with proper cursor variable passing."""
+    cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
+    if cursor:
+        cmd.extend(["-F", f"cursor={cursor}"])
     for attempt in range(max_retries):
-        result = subprocess.run(
-            ["gh", "api", "graphql", "-f", f"query={query}"],
-            capture_output=True, text=True,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             return json.loads(result.stdout)
         if attempt < max_retries - 1:
-            time.sleep(10 * (attempt + 1))
+            wait = 15 * (attempt + 1)
+            print(f"    Retry in {wait}s: {result.stderr.strip()[:100]}", flush=True)
+            time.sleep(wait)
     return None
 
+def build_batch_query(numbers):
+    parts = []
+    for i, num in enumerate(numbers):
+        parts.append(f'pr{i}: repository(owner: "PostHog", name: "posthog") {{ pullRequest(number: {num}) {{ number title additions deletions changedFiles createdAt mergedAt author {{ login }} mergedBy {{ login }} labels(first: 10) {{ nodes {{ name }} }} body reviewDecision reviews(first: 10) {{ nodes {{ state author {{ login }} submittedAt body }} }} files(first: 50) {{ nodes {{ path additions deletions changeType }} }} comments {{ totalCount }} reviewThreads {{ totalCount }} }} }}')
+    return "query {\n" + "\n".join(parts) + "\n}"
+
 def pass1_collect_numbers():
-    """Lightweight search to get all PR numbers."""
     chunks = []
     current = date(2025, 12, 2)
-    end = date(2026, 3, 2)
-    while current < end:
-        chunk_end = min(current + timedelta(days=10), end)
+    end_date = date(2026, 3, 2)
+    while current < end_date:
+        chunk_end = min(current + timedelta(days=10), end_date)
         chunks.append((current.isoformat(), chunk_end.isoformat()))
         current = chunk_end
 
     all_numbers = set()
 
-    for i, (start, end_str) in enumerate(chunks):
+    for i, (start, end) in enumerate(chunks):
         cursor = None
         chunk_nums = set()
+        query = SEARCH_QUERY.format(start=start, end=end)
 
         for page in range(1, 12):
-            q = SEARCH_QUERY.format(start=start, end=end_str)
-            if cursor:
-                q = q.replace("$cursor", f'"{cursor}"')
-            else:
-                q = q.replace("$cursor", "null")
+            data = gh_graphql(query, cursor=cursor)
+            if not data:
+                print(f"  [{start}..{end}] page {page} FAILED", flush=True)
+                break
 
-            # Use variables properly
-            variables = json.dumps({"cursor": cursor})
-            result = subprocess.run(
-                ["gh", "api", "graphql",
-                 "-f", f"query={SEARCH_QUERY.format(start=start, end=end_str)}",
-                 "-f", f"variables={variables}"],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                time.sleep(15)
-                result = subprocess.run(
-                    ["gh", "api", "graphql",
-                     "-f", f"query={SEARCH_QUERY.format(start=start, end=end_str)}",
-                     "-f", f"variables={variables}"],
-                    capture_output=True, text=True,
-                )
-                if result.returncode != 0:
-                    print(f"  [{start}..{end_str}] page {page} FAILED", flush=True)
-                    break
-
-            data = json.loads(result.stdout)
             search = data["data"]["search"]
-
-            new_nums = set()
-            for node in search["nodes"]:
-                if node and "number" in node:
-                    new_nums.add(node["number"])
+            expected = search.get("issueCount", 0)
 
             prev_size = len(chunk_nums)
-            chunk_nums |= new_nums
+            for node in search["nodes"]:
+                if node and "number" in node:
+                    chunk_nums.add(node["number"])
 
             if len(chunk_nums) == prev_size:
-                break  # No new results, pagination cycling
+                break
 
-            if not search["pageInfo"]["hasNextPage"]:
+            if not search["pageInfo"]["hasNextPage"] or len(chunk_nums) >= expected:
                 break
             cursor = search["pageInfo"]["endCursor"]
             time.sleep(0.2)
 
         all_numbers |= chunk_nums
-        expected = search.get("issueCount", "?")
-        print(f"  Chunk {i+1}: {start}..{end_str} -> {len(chunk_nums)} PRs (expected ~{expected})", flush=True)
+        print(f"  Chunk {i+1}/{len(chunks)}: {start}..{end} -> {len(chunk_nums)} PRs (expected ~{expected})", flush=True)
 
     return sorted(all_numbers)
 
 def pass2_fetch_details(numbers):
-    """Fetch full PR details in batches of 20."""
     batch_size = 20
     all_prs = []
 
@@ -187,15 +136,15 @@ def pass2_fetch_details(numbers):
             continue
 
         for j in range(len(batch)):
-            key = f"pr{j}"
-            repo_data = data.get("data", {}).get(key, {})
+            repo_data = data.get("data", {}).get(f"pr{j}", {})
             pr_data = repo_data.get("pullRequest") if repo_data else None
             if pr_data:
                 pr = parse_pr(pr_data)
                 if pr:
                     all_prs.append(pr)
 
-        if (i // batch_size + 1) % 10 == 0:
+        done = min(i + batch_size, len(numbers))
+        if (i // batch_size + 1) % 5 == 0 or done == len(numbers):
             print(f"  Fetched {len(all_prs)}/{len(numbers)} PR details...", flush=True)
 
         time.sleep(0.3)

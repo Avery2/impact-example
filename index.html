@@ -290,6 +290,102 @@
       padding: 4rem;
       color: var(--text-secondary);
     }
+
+    /* Methodology link */
+    .methodology-link {
+      text-align: center;
+      margin-bottom: 2rem;
+      font-size: 0.8rem;
+    }
+
+    .methodology-link a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .methodology-link a:hover { text-decoration: underline; }
+
+    /* Data sources section */
+    .data-section {
+      margin-bottom: 2rem;
+    }
+
+    .data-section summary {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 0.75rem 0;
+      border-top: 1px solid var(--border);
+      list-style: none;
+    }
+
+    .data-section summary::before {
+      content: '▸ ';
+    }
+
+    .data-section[open] summary::before {
+      content: '▾ ';
+    }
+
+    .data-sources {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      padding: 0.75rem 0;
+    }
+
+    .data-source {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+    }
+
+    .data-source.disabled {
+      opacity: 0.5;
+    }
+
+    .data-source-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .data-source-status {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .data-source-status.active { background: var(--green); }
+    .data-source-status.disabled { background: var(--border); }
+
+    .coming-soon {
+      font-size: 0.7rem;
+      background: var(--border);
+      color: var(--text-secondary);
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-weight: 400;
+    }
+
+    .data-source-detail {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .data-source-detail.muted { color: #a3a3a3; }
+
+    .data-source-detail a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .data-source-detail a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -298,7 +394,6 @@
       <h1>Engineering Impact Dashboard</h1>
       <div class="meta">
         PostHog/posthog · Dec 2, 2025 – Mar 2, 2026
-        <br><a href="notebook.html">See how this was calculated →</a>
       </div>
     </header>
 
@@ -309,9 +404,52 @@
     <div id="cards" class="cards">
     </div>
 
-    <div class="footer">
-      <a href="notebook.html">Full methodology & data notebook →</a>
+    <div class="methodology-link">
+      <a href="notebook.html">See how scores are calculated →</a>
     </div>
+
+    <details class="data-section">
+      <summary>Data Sources</summary>
+      <div class="data-sources">
+        <div class="data-source active">
+          <div class="data-source-header">
+            <span class="data-source-status active"></span>
+            <strong>GitHub</strong>
+          </div>
+          <div class="data-source-detail">
+            <a href="https://github.com/PostHog/posthog" target="_blank">PostHog/posthog</a> ·
+            <span id="data-stats">Loading...</span>
+          </div>
+          <div class="data-source-detail">
+            <a href="notebook.html">Full methodology & data notebook →</a>
+          </div>
+        </div>
+        <div class="data-source disabled">
+          <div class="data-source-header">
+            <span class="data-source-status disabled"></span>
+            <strong>Linear</strong>
+            <span class="coming-soon">Coming soon</span>
+          </div>
+          <div class="data-source-detail muted">Issue tracking, sprint velocity, project completion</div>
+        </div>
+        <div class="data-source disabled">
+          <div class="data-source-header">
+            <span class="data-source-status disabled"></span>
+            <strong>Slack</strong>
+            <span class="coming-soon">Coming soon</span>
+          </div>
+          <div class="data-source-detail muted">Cross-team communication, help given, incident response</div>
+        </div>
+        <div class="data-source disabled">
+          <div class="data-source-header">
+            <span class="data-source-status disabled"></span>
+            <strong>Deploy logs</strong>
+            <span class="coming-soon">Coming soon</span>
+          </div>
+          <div class="data-source-detail muted">Deploy frequency, rollback rate, production incidents</div>
+        </div>
+      </div>
+    </details>
   </div>
 
   <button class="config-btn" onclick="openModal()">Edit weights</button>
@@ -375,6 +513,15 @@
         loadJSON('issues.json'),
       ]);
       rawData = { commits: commits || [], prs: prs || [], issues: issues || [] };
+
+      const statsEl = document.getElementById('data-stats');
+      if (statsEl) {
+        const parts = [];
+        if (rawData.commits.length) parts.push(`${rawData.commits.length.toLocaleString()} commits`);
+        if (rawData.prs.length) parts.push(`${rawData.prs.length.toLocaleString()} PRs`);
+        if (rawData.issues.length) parts.push(`${rawData.issues.length.toLocaleString()} issues`);
+        statsEl.textContent = parts.join(', ') || 'No data loaded';
+      }
 
       computeAndRender();
     }
