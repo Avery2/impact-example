@@ -386,6 +386,57 @@
     }
 
     .data-source-detail a:hover { text-decoration: underline; }
+
+    /* Others card */
+    .card-others {
+      background: var(--bg);
+      border: 1px dashed var(--border);
+    }
+
+    .card-others-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 0.25rem;
+    }
+
+    .card-others-avg {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+    }
+
+    .card-others-avg strong { color: var(--text); }
+
+    .card-others-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .others-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      padding: 0.15rem 0;
+    }
+
+    .others-row.muted { color: #a3a3a3; font-style: italic; }
+
+    .others-score { font-weight: 600; color: var(--text); }
+
+    .card-others-link {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.75rem;
+    }
+
+    .view-all-disabled { color: #a3a3a3; }
   </style>
 </head>
 <body>
@@ -792,10 +843,10 @@
 
     function renderCards() {
       const top5 = engineers.slice(0, 5);
+      const rest = engineers.slice(5);
       const usedArchetypes = new Set();
       const cards = top5.map(eng => {
         let archKey = assignArchetype(eng, engineers);
-        // Avoid duplicate archetypes in top 5
         if (usedArchetypes.has(archKey)) {
           const altKeys = Object.keys(ARCHETYPES).filter(k => !usedArchetypes.has(k));
           if (altKeys.length > 0) archKey = altKeys[0];
@@ -818,6 +869,26 @@
           </div>
         `;
       });
+
+      // 6th card: everyone else summary
+      if (rest.length > 0) {
+        const nextUp = rest.slice(0, 5);
+        const avgScore = Math.round(rest.reduce((s, e) => s + e.composite, 0) / rest.length);
+        cards.push(`
+          <div class="card card-others">
+            <div class="card-others-title">${rest.length} other contributors</div>
+            <div class="card-others-avg">Avg. composite score: <strong>${avgScore}</strong></div>
+            <div class="card-others-list">
+              ${nextUp.map(e => `<div class="others-row"><span class="others-name">${e.author}</span><span class="others-score">${Math.round(e.composite)}</span></div>`).join('')}
+              ${rest.length > 5 ? `<div class="others-row muted"><span>+ ${rest.length - 5} more</span></div>` : ''}
+            </div>
+            <div class="card-others-link">
+              <span class="view-all-disabled">View all contributors</span>
+              <span class="coming-soon">Coming soon</span>
+            </div>
+          </div>
+        `);
+      }
 
       document.getElementById('cards').innerHTML = cards.join('');
     }
