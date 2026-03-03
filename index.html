@@ -336,11 +336,6 @@
       ]);
       rawData = { commits: commits || [], prs: prs || [], issues: issues || [] };
 
-      if (rawData.prs.length === 0) {
-        document.getElementById('hero').innerHTML = '<div class="loading">PR data not yet available. Run collect_prs.py first.</div>';
-        return;
-      }
-
       computeAndRender();
     }
 
@@ -403,8 +398,13 @@
         issuesByCreator[a] = (issuesByCreator[a] || 0) + 1;
       }
 
-      // Build unified engineer list (keyed by PR author login)
-      const allAuthors = new Set([...Object.keys(prsByAuthor), ...Object.keys(reviewsByAuthor)]);
+      // Build unified engineer list from all data sources
+      const allAuthors = new Set([
+        ...Object.keys(prsByAuthor),
+        ...Object.keys(reviewsByAuthor),
+        ...Object.keys(commitsByAuthor),
+        ...Object.keys(issuesByCreator),
+      ]);
       const engList = [];
 
       for (const author of allAuthors) {
@@ -438,15 +438,23 @@
           if (/feat|feature|enhancement/.test(labels)) featurePRs++;
         }
 
-        // Try to match commit data (heuristic: author login in commit author name/email)
+        // Match commit data: direct name match, or fuzzy match via login
         let commitCount = 0, linesAdded = 0, linesDeleted = 0;
-        const authorLower = author.toLowerCase();
-        for (const [name, data] of Object.entries(commitsByAuthor)) {
-          if (name.toLowerCase().includes(authorLower) || authorLower.includes(name.toLowerCase().split(' ')[0])) {
-            commitCount += data.count;
-            linesAdded += data.adds;
-            linesDeleted += data.dels;
-            break;
+        if (commitsByAuthor[author]) {
+          // Direct match (commit author name = author key)
+          commitCount = commitsByAuthor[author].count;
+          linesAdded = commitsByAuthor[author].adds;
+          linesDeleted = commitsByAuthor[author].dels;
+        } else {
+          // Fuzzy match for PR authors vs commit names
+          const authorLower = author.toLowerCase();
+          for (const [name, data] of Object.entries(commitsByAuthor)) {
+            if (name.toLowerCase().includes(authorLower) || authorLower.includes(name.toLowerCase().split(' ')[0])) {
+              commitCount += data.count;
+              linesAdded += data.adds;
+              linesDeleted += data.dels;
+              break;
+            }
           }
         }
 
