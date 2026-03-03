@@ -1,2 +1,1 @@
-- code complete at 1h 33m
-    - still leaving time to fix any render issues, haven't checked latest deploy.
+This took me 1h 33m from idea to deployment.
