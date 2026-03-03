@@ -108,7 +108,21 @@
     .hero-breakdown span { font-weight: 600; color: var(--text); }
 
     /* Cards grid */
-    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .cards .card {
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    .cards.transitioning .card {
+      opacity: 0;
+      transform: translateY(8px);
+    }
 
     .card {
       background: var(--surface);
@@ -226,12 +240,26 @@
 
     .slider-group { margin-bottom: 1.25rem; }
 
-    .slider-group label {
+    .slider-header {
       display: flex;
-      justify-content: space-between;
-      font-size: 0.8rem;
+      align-items: center;
+      gap: 0.5rem;
       margin-bottom: 0.25rem;
     }
+
+    .slider-header input[type="checkbox"] {
+      accent-color: var(--accent);
+    }
+
+    .slider-header label {
+      display: flex;
+      justify-content: space-between;
+      flex: 1;
+      font-size: 0.8rem;
+    }
+
+    .slider-group.disabled { opacity: 0.4; }
+    .slider-group.disabled input[type="range"] { pointer-events: none; }
 
     .slider-group input[type="range"] { width: 100%; }
 
@@ -292,20 +320,32 @@
     <div class="modal">
       <h2>Dimension Weights</h2>
       <p>Adjust how much each dimension contributes to the composite score. Scores and archetypes recalculate instantly.</p>
-      <div class="slider-group">
-        <label>Delivery <span id="w-delivery-val">1.0×</span></label>
+      <div class="slider-group" id="sg-delivery">
+        <div class="slider-header">
+          <input type="checkbox" id="cb-delivery" checked onchange="toggleDimension('delivery')">
+          <label>Delivery <span id="w-delivery-val">1.0×</span></label>
+        </div>
         <input type="range" id="w-delivery" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-delivery-val')">
       </div>
-      <div class="slider-group">
-        <label>Scope <span id="w-scope-val">1.0×</span></label>
+      <div class="slider-group" id="sg-scope">
+        <div class="slider-header">
+          <input type="checkbox" id="cb-scope" checked onchange="toggleDimension('scope')">
+          <label>Scope <span id="w-scope-val">1.0×</span></label>
+        </div>
         <input type="range" id="w-scope" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-scope-val')">
       </div>
-      <div class="slider-group">
-        <label>Collaboration <span id="w-collaboration-val">1.0×</span></label>
+      <div class="slider-group" id="sg-collaboration">
+        <div class="slider-header">
+          <input type="checkbox" id="cb-collaboration" checked onchange="toggleDimension('collaboration')">
+          <label>Collaboration <span id="w-collaboration-val">1.0×</span></label>
+        </div>
         <input type="range" id="w-collaboration" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-collaboration-val')">
       </div>
-      <div class="slider-group">
-        <label>Stability <span id="w-stability-val">1.0×</span></label>
+      <div class="slider-group" id="sg-stability">
+        <div class="slider-header">
+          <input type="checkbox" id="cb-stability" checked onchange="toggleDimension('stability')">
+          <label>Stability <span id="w-stability-val">1.0×</span></label>
+        </div>
         <input type="range" id="w-stability" min="0" max="3" step="0.1" value="1.0" oninput="updateSliderLabel(this, 'w-stability-val')">
       </div>
       <div class="modal-actions">
@@ -653,15 +693,75 @@
       document.getElementById(labelId).textContent = parseFloat(input.value).toFixed(1) + '×';
     }
 
+    let dimensionEnabled = { delivery: true, scope: true, collaboration: true, stability: true };
+
+    function toggleDimension(dim) {
+      const cb = document.getElementById('cb-' + dim);
+      const sg = document.getElementById('sg-' + dim);
+      dimensionEnabled[dim] = cb.checked;
+      sg.classList.toggle('disabled', !cb.checked);
+    }
+
     function applyWeights() {
-      weights.delivery = parseFloat(document.getElementById('w-delivery').value);
-      weights.scope = parseFloat(document.getElementById('w-scope').value);
-      weights.collaboration = parseFloat(document.getElementById('w-collaboration').value);
-      weights.stability = parseFloat(document.getElementById('w-stability').value);
+      for (const dim of ['delivery', 'scope', 'collaboration', 'stability']) {
+        weights[dim] = dimensionEnabled[dim] ? parseFloat(document.getElementById('w-' + dim).value) : 0;
+      }
       applyComposite(engineers);
-      renderHero();
-      renderCards();
+      animateRender();
       closeModal();
+    }
+
+    function animateRender() {
+      // Animate hero score
+      const heroScoreEl = document.querySelector('.hero-score');
+      const heroBarFill = document.querySelector('.hero-bar-fill');
+      if (heroScoreEl && heroBarFill) {
+        const avgComposite = engineers.length > 0
+          ? engineers.reduce((s, e) => s + e.composite, 0) / engineers.length : 0;
+        const { color, band } = healthColor(avgComposite);
+        animateNumber(heroScoreEl, Math.round(avgComposite), color);
+        heroBarFill.style.width = avgComposite + '%';
+        heroBarFill.style.background = color;
+        document.querySelector('.hero-band').textContent = band;
+        document.querySelector('.hero-band').style.color = color;
+
+        const dims = ['delivery', 'scope', 'collaboration', 'stability'];
+        const breakdownEls = document.querySelectorAll('.hero-breakdown div');
+        dims.forEach((dim, i) => {
+          if (breakdownEls[i]) {
+            const val = avg(engineers, dim);
+            const span = breakdownEls[i].querySelector('span');
+            if (span) animateNumber(span, Math.round(val));
+          }
+        });
+      }
+
+      // Animate cards: fade out, swap content, fade in
+      const cardsEl = document.getElementById('cards');
+      cardsEl.classList.add('transitioning');
+      setTimeout(() => {
+        renderCards();
+        requestAnimationFrame(() => {
+          cardsEl.classList.remove('transitioning');
+        });
+      }, 300);
+    }
+
+    function animateNumber(el, target, color) {
+      const start = parseInt(el.textContent) || 0;
+      const diff = target - start;
+      const duration = 400;
+      const startTime = performance.now();
+
+      function step(now) {
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        el.textContent = Math.round(start + diff * eased);
+        if (color) el.style.color = color;
+        if (progress < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
     }
 
     // Close modal on overlay click
